@@ -1,0 +1,100 @@
+name: Deploy to Server
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to deploy'
+        required: true
+        default: 'master'
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          set -e
+          
+          # Validate required secrets
+          if [ -z "$SSH_HOST" ]; then
+            echo "❌ Error: SSH_HOST secret is not set"
+            exit 1
+          fi
+          
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "❌ Error: SSH_PRIVATE_KEY secret is not set"
+            exit 1
+          fi
+          
+          # Setup SSH directory and key
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          
+          # Add server to known hosts
+          echo "🔍 Scanning SSH host: $SSH_HOST"
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>&1 || {
+            echo "⚠️  Warning: ssh-keyscan failed, but continuing..."
+          }
+          
+          # Verify SSH key format
+          if ! grep -q "BEGIN.*PRIVATE KEY" ~/.ssh/deploy_key; then
+            echo "❌ Error: SSH_PRIVATE_KEY does not appear to be a valid private key"
+            exit 1
+          fi
+          
+          echo "✅ SSH configuration completed"
+          
+      - name: Deploy to server
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          BRANCH: ${{ github.event.inputs.branch }}
+        run: |
+          set -e
+          
+          # Validate required secrets
+          if [ -z "$SSH_USER" ]; then
+            echo "❌ Error: SSH_USER secret is not set"
+            exit 1
+          fi
+          
+          if [ -z "$DEPLOY_PATH" ]; then
+            echo "❌ Error: DEPLOY_PATH secret is not set"
+            exit 1
+          fi
+          
+          echo "🚀 Starting deployment..."
+          echo "📡 Connecting to server (SSH_USER and SSH_HOST configured)"
+          echo "📂 Deploy path configured"
+          echo "🌿 Branch: $BRANCH"
+          
+          # Test SSH connection first
+          echo "🔍 Testing SSH connection..."
+          ssh -i ~/.ssh/deploy_key \
+              -o ConnectTimeout=10 \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=~/.ssh/known_hosts \
+              "$SSH_USER@$SSH_HOST" "echo 'SSH connection successful'" || {
+            echo "❌ Error: Failed to connect to server"
+            exit 1
+          }
+          
+          # Execute deployment
+          echo "📦 Executing deployment script..."
+          ssh -i ~/.ssh/deploy_key \
+              -o ConnectTimeout=30 \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=~/.ssh/known_hosts \
+              "$SSH_USER@$SSH_HOST" "cd $DEPLOY_PATH && bash .github/workflows/deploy.sh $BRANCH"
+          
+          echo "✅ Deployment completed successfully!"
